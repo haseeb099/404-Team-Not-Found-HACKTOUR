@@ -8,11 +8,12 @@ high-risk response before Margaret hears it. Two-layer safety:
 
 import os
 import re
+import ssl
 import json
 import httpx
 import certifi
 from datetime import datetime
-from openai import OpenAI
+from openai import OpenAI, RateLimitError, AuthenticationError, APIStatusError
 
 from memory import (
     get_relevant_memories,
@@ -23,40 +24,110 @@ from memory import (
 )
 from escalation import fire_escalation
 
-# Point client at Z.AI endpoint (OpenAI-compatible)
-# Cross-platform SSL: try certifi CA bundle first, fall back to default,
-# then to verify=False for macOS Python 3.14 (known SSL cert issue)
-def _build_openai_client() -> OpenAI:
-    api_key = os.environ.get("GLM_API_KEY", "")
-    base_url = "https://api.z.ai/api/paas/v4/"
-    
-    # Strategy 1: Use certifi CA bundle (works on most systems)
-    try:
-        return OpenAI(
-            api_key=api_key,
-            base_url=base_url,
-            http_client=httpx.Client(verify=certifi.where()),
-        )
-    except Exception:
-        pass
-    
-    # Strategy 2: Default SSL (works on Windows/Linux)
-    try:
-        return OpenAI(api_key=api_key, base_url=base_url)
-    except Exception:
-        pass
-    
-    # Strategy 3: Skip SSL verification (macOS Python 3.14 fallback)
-    import warnings
-    warnings.filterwarnings("ignore", message="Unverified HTTPS request")
+# Point client at Z.AI endpoint (OpenAI-compatible).
+# SSL errors and timeouts only surface at request time, so we do the real
+# fallback there — _llm_call catches SSL failures and rebuilds the client
+# with verify=False (macOS Python 3.14 cert issue).
+BASE_URL = "https://api.z.ai/api/paas/v4/"
+_TIMEOUT = httpx.Timeout(45.0, connect=10.0)
+
+
+def _make_client(verify) -> OpenAI:
     return OpenAI(
-        api_key=api_key,
-        base_url=base_url,
-        http_client=httpx.Client(verify=False),
+        api_key=os.environ.get("GLM_API_KEY", ""),
+        base_url=BASE_URL,
+        http_client=httpx.Client(verify=verify, timeout=_TIMEOUT),
+        max_retries=2,
     )
 
 
-client = _build_openai_client()
+client = _make_client(certifi.where())
+_ssl_fallback_engaged = False
+_use_claude_fallback = False
+_claude_client = None
+CLAUDE_MODEL = "claude-sonnet-4-5"
+
+
+def _get_claude_client():
+    global _claude_client
+    if _claude_client is None:
+        from anthropic import Anthropic
+        _claude_client = Anthropic()  # picks up ANTHROPIC_API_KEY from env
+    return _claude_client
+
+
+class _ShimMsg:
+    def __init__(self, content: str):
+        self.content = content
+
+
+class _ShimChoice:
+    def __init__(self, content: str):
+        self.message = _ShimMsg(content)
+
+
+class _ShimResponse:
+    """Mimics the shape of openai.ChatCompletion so call sites can keep using
+    response.choices[0].message.content regardless of which backend replied."""
+    def __init__(self, content: str):
+        self.choices = [_ShimChoice(content)]
+
+
+def _claude_fallback(**kwargs) -> _ShimResponse:
+    """Route a chat.completions-style call through Anthropic.
+
+    The agent only ever sends a single user-role message containing the whole
+    composed prompt, so we just forward that body. temperature/max_tokens pass
+    through unchanged; model is overridden to Claude.
+    """
+    messages = kwargs.get("messages", [])
+    user_content = messages[-1]["content"] if messages else ""
+    claude_msg = _get_claude_client().messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=kwargs.get("max_tokens", 200),
+        temperature=kwargs.get("temperature", 0.4),
+        messages=[{"role": "user", "content": user_content}],
+    )
+    text = claude_msg.content[0].text if claude_msg.content else ""
+    return _ShimResponse(text)
+
+
+def _looks_like_ssl_error(exc: BaseException) -> bool:
+    cur: BaseException | None = exc
+    while cur is not None:
+        if isinstance(cur, ssl.SSLError):
+            return True
+        msg = str(cur).lower()
+        if "ssl" in msg or "certificate verify failed" in msg or "cert" in msg:
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
+def _llm_call(**kwargs):
+    """Wrapped chat.completions.create with two latched fallbacks:
+    1. SSL cert failure on macOS Python 3.14 → rebuild client with verify=False.
+    2. GLM rate-limit / auth / persistent 4xx → switch to Claude via anthropic SDK.
+    Both latches are process-lifetime so we don't retry a broken path per request.
+    """
+    global client, _ssl_fallback_engaged, _use_claude_fallback
+    if _use_claude_fallback:
+        return _claude_fallback(**kwargs)
+    try:
+        return client.chat.completions.create(**kwargs)
+    except Exception as e:
+        if _looks_like_ssl_error(e) and not _ssl_fallback_engaged:
+            import warnings
+            warnings.filterwarnings("ignore", message="Unverified HTTPS request")
+            print(f"[SSL] Cert verification failed, retrying with verify=False: {e}")
+            client = _make_client(False)
+            _ssl_fallback_engaged = True
+            return client.chat.completions.create(**kwargs)
+        if isinstance(e, (RateLimitError, AuthenticationError, APIStatusError)):
+            print(f"[FALLBACK] GLM unavailable ({type(e).__name__}), switching to Claude: {e}")
+            _use_claude_fallback = True
+            return _claude_fallback(**kwargs)
+        raise
 
 SYSTEM_PROMPT = """You are Anchor — a quiet companion who helps Margaret remember.
 
@@ -216,7 +287,7 @@ def verify_with_critic(
     and condescension. Returns (approved, reason).
     """
     try:
-        critic_call = client.chat.completions.create(
+        critic_call = _llm_call(
             model="glm-4.5",
             messages=[
                 {
@@ -274,7 +345,7 @@ def respond_to_margaret(user_input: str) -> dict:
         user_input=user_input,
     )
 
-    response = client.chat.completions.create(
+    response = _llm_call(
         model="glm-4.5",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.4,  # warm but not hallucinatory

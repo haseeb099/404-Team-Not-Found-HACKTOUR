@@ -133,7 +133,7 @@ function browserFallback(text) {
 }
 
 // ─── Acknowledgement sound (soft "mmm" placeholder) ───
-const ackAudio = new Audio('/static/assets/ack.mp3');
+const ackAudio = new Audio('/static/assets/ack.wav');
 ackAudio.volume = 0.4;
 function playAcknowledgement() {
   ackAudio.currentTime = 0;
