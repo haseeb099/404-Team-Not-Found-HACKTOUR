@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Carer view — Priya</title>
+  <style>
+    body {
+      font-family: -apple-system, system-ui, sans-serif;
+      background: #fff;
+      margin: 0;
+      padding: 20px;
+    }
+    h1 {
+      font-size: 18px;
+      color: #666;
+      font-weight: 500;
+      margin-bottom: 20px;
+    }
+    .notif {
+      background: #fff;
+      border: 1px solid #e5e5e5;
+      border-left: 4px solid #8ea876;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 12px;
+      animation: slide-in 0.4s ease;
+    }
+    .notif.high {
+      border-left-color: #c47a54;
+    }
+    .notif .time {
+      font-size: 12px;
+      color: #999;
+    }
+    .notif .msg {
+      margin-top: 6px;
+      font-size: 15px;
+    }
+    .notif .anchor-said {
+      margin-top: 4px;
+      font-size: 14px;
+      color: #666;
+    }
+    @keyframes slide-in {
+      from { transform: translateX(20px); opacity: 0; }
+      to { transform: none; opacity: 1; }
+    }
+    #empty-state {
+      color: #aaa;
+      font-size: 14px;
+      text-align: center;
+      margin-top: 40px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Priya's carer view</h1>
+  <div id="notifications"></div>
+  <div id="empty-state">No notifications yet. Margaret is doing fine.</div>
+  <audio id="chime" src="/static/assets/chime.mp3"></audio>
+
+  <script>
+    let lastCount = 0;
+
+    async function poll() {
+      try {
+        const res = await fetch('/api/carer/notifications');
+        const notifs = await res.json();
+        if (notifs.length > lastCount) {
+          const chime = document.getElementById('chime');
+          chime.play().catch(() => {});
+          lastCount = notifs.length;
+        }
+        render(notifs);
+      } catch (err) {
+        console.error('Poll error:', err);
+      }
+    }
+
+    function render(notifs) {
+      const container = document.getElementById('notifications');
+      const emptyState = document.getElementById('empty-state');
+
+      if (notifs.length === 0) {
+        container.innerHTML = '';
+        emptyState.style.display = 'block';
+        return;
+      }
+
+      emptyState.style.display = 'none';
+      container.innerHTML = notifs.slice().reverse().map(n => `
+        <div class="notif ${n.urgency}">
+          <div class="time">${new Date(n.time).toLocaleTimeString()}</div>
+          <div class="msg"><strong>${n.reason}</strong> — ${n.patient_said}</div>
+          <div class="anchor-said">Anchor said: ${n.anchor_replied}</div>
+        </div>
+      `).join('');
+    }
+
+    setInterval(poll, 2000);
+    poll();
+  </script>
+</body>
+</html>

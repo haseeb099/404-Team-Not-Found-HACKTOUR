@@ -1,0 +1,114 @@
+/* Anchor — warm, accessible styles for dementia patients */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  background: #f4efe6;             /* warm cream */
+  color: #2d2a26;                  /* soft near-black */
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 32px;
+  line-height: 1.5;
+  overflow: hidden;
+}
+
+#app {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* --- Resting screen --- */
+#resting-screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.6s ease;
+}
+
+#resting-bg {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, #e8ddd0 0%, #d4c5b0 30%, #c9b89e 60%, #bfae94 100%);
+  opacity: 0.85;
+}
+
+#listening-pulse {
+  position: absolute;
+  bottom: 140px;
+  width: 20px;
+  height: 20px;
+  background: #c47a54;              /* warm terracotta */
+  border-radius: 50%;
+  animation: pulse 2.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); opacity: 0.5; }
+  50%      { transform: scale(1.4); opacity: 1; }
+}
+
+.resting.listening #listening-pulse {
+  animation-duration: 0.8s;
+  background: #8ea876;              /* soft sage while actively listening */
+}
+
+/* --- Response screen --- */
+#response-screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  background: rgba(244, 239, 230, 0.92);
+  transition: opacity 0.6s ease;
+  z-index: 10;
+}
+
+#response-text {
+  font-size: 48px;
+  line-height: 1.4;
+  max-width: 900px;
+  text-align: center;
+  color: #2d2a26;
+}
+
+/* --- Fallback buttons --- */
+#fallback-buttons {
+  position: absolute;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 12px;
+  opacity: 0.7;
+  z-index: 20;
+}
+
+#fallback-buttons button {
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid #c4b7a4;
+  border-radius: 30px;
+  padding: 14px 24px;
+  font-family: inherit;
+  font-size: 18px;
+  color: #2d2a26;
+  cursor: pointer;
+  transition: background 0.2s;
+  min-width: 44px;
+  min-height: 44px;
+}
+
+#fallback-buttons button:hover,
+#fallback-buttons button:focus {
+  background: #fff;
+  outline: 2px solid #c47a54;
+}
+
+/* When speaking/responding, hide the resting image softly */
+.speaking #resting-screen { opacity: 0.3; }
