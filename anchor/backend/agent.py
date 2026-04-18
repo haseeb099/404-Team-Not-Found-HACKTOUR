@@ -9,6 +9,8 @@ high-risk response before Margaret hears it. Two-layer safety:
 import os
 import re
 import json
+import httpx
+import certifi
 from datetime import datetime
 from openai import OpenAI
 
@@ -22,10 +24,39 @@ from memory import (
 from escalation import fire_escalation
 
 # Point client at Z.AI endpoint (OpenAI-compatible)
-client = OpenAI(
-    api_key=os.environ.get("GLM_API_KEY", ""),
-    base_url="https://api.z.ai/api/paas/v4/",
-)
+# Cross-platform SSL: try certifi CA bundle first, fall back to default,
+# then to verify=False for macOS Python 3.14 (known SSL cert issue)
+def _build_openai_client() -> OpenAI:
+    api_key = os.environ.get("GLM_API_KEY", "")
+    base_url = "https://api.z.ai/api/paas/v4/"
+    
+    # Strategy 1: Use certifi CA bundle (works on most systems)
+    try:
+        return OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            http_client=httpx.Client(verify=certifi.where()),
+        )
+    except Exception:
+        pass
+    
+    # Strategy 2: Default SSL (works on Windows/Linux)
+    try:
+        return OpenAI(api_key=api_key, base_url=base_url)
+    except Exception:
+        pass
+    
+    # Strategy 3: Skip SSL verification (macOS Python 3.14 fallback)
+    import warnings
+    warnings.filterwarnings("ignore", message="Unverified HTTPS request")
+    return OpenAI(
+        api_key=api_key,
+        base_url=base_url,
+        http_client=httpx.Client(verify=False),
+    )
+
+
+client = _build_openai_client()
 
 SYSTEM_PROMPT = """You are Anchor — a quiet companion who helps Margaret remember.
 
@@ -225,7 +256,10 @@ def respond_to_margaret(user_input: str) -> dict:
     memory_block = build_memory_block(profile, relevant)
 
     # 4. Gather context
-    now = datetime.now().strftime("%A %-d %B, %H:%M")
+    # Cross-platform date format (%-d is Linux/Mac only, %#d is Windows)
+    import platform
+    _d_fmt = "%-d" if platform.system() != "Windows" else "%#d"
+    now = datetime.now().strftime(f"%A {_d_fmt} %B, %H:%M")
     last_med = get_last_medication_log()
     next_event = profile["scheduled_events"][0]
     recent_turns = get_recent_conversation(n=3)
